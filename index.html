@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tango & Clover — Virtual Pets</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+    @keyframes wag{0%,100%{transform:rotate(0)}25%{transform:rotate(6deg)}75%{transform:rotate(-6deg)}}
+    .wag{animation:wag 1.3s ease-in-out infinite;transform-origin:50% 80%}
+    .toast{transition:all .25s ease}
+  </style>
+</head>
+<body class="bg-gradient-to-br from-lime-50 to-sky-50 text-slate-800 min-h-screen">
+  <div id="root"></div>
+
+  <!-- React + ReactDOM -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel so we can keep this single file -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // Try to use repo images if present; otherwise fallback to null (emoji).
+    async function urlExists(url){ try{ const r = await fetch(url, {method:"HEAD"}); return r.ok; }catch{return false;} }
+    const REPO_BASE = "."; // image paths relative to index.html
+    const DEFAULTS = {
+      tango: { main: `${REPO_BASE}/tango-main.png`, alt: `${REPO_BASE}/tango-alt.png` },
+      clover:{ main: `${REPO_BASE}/clover-main.png`, alt: null }
+    };
+
+    const clamp = (v, lo=0, hi=100)=>Math.min(hi, Math.max(lo, v));
+    const fmt = n => Math.round(n);
+
+    function useLocalState(key, initial){
+      const [val, setVal] = useState(()=>{ try{
+        const s = localStorage.getItem(key); return s? JSON.parse(s): initial;
+      }catch{return initial;} });
+      useEffect(()=>{ try{ localStorage.setItem(key, JSON.stringify(val)); }catch{} },[key,val]);
+      return [val,setVal];
+    }
+
+    function StatBar({label,value,color}){
+      return (
+        <div className="rounded-2xl border border-slate-200 bg-white p-3">
+          <div className="mb-1 flex items-center gap-2 text-sm">
+            <span className="opacity-70">•</span> {label}
+            <span className="ml-auto text-slate-500">{fmt(value)}%</span>
+          </div>
+          <div className="h-3 w-full rounded-full bg-slate-100 overflow-hidden">
+            <div className={`h-full bg-gradient-to-r ${color}`} style={{width:`${clamp(value)}%`}} />
+          </div>
+        </div>
+      );
+    }
+
+    function App(){
+      const [pets, setPets] = useLocalState("tc_pets_v4", null);
+      const [active, setActive] = useLocalState("tc_active_v1", "tango");
+      const [isWalking, setIsWalking] = useState(false);
+      const [steps, setSteps] = useState(0);
+      const [walkEndsAt, setWalkEndsAt] = useState(null);
+      const [message, setMessage] = useState("");
+      const fileMainRef = useRef(null);
+      const fileAltRef  = useRef(null);
+
+      // Initialize with repo images if they exist
+      useEffect(()=>{(async ()=>{
+        if (pets) return;
+        const tMain = await urlExists(DEFAULTS.tango.main) ? DEFAULTS.tango.main : null;
+        const tAlt  = await urlExists(DEFAULTS.tango.alt  || "") ? DEFAULTS.tango.alt : null;
+        const cMain = await urlExists(DEFAULTS.clover.main)? DEFAULTS.clover.main: null;
+        const now = Date.now();
+        setPets({
+          tango:{ id:"tango", name:"Tango", breed:"Yellow Labrador", emoji:"🐕",
+            img:tMain, imgAlt:tAlt,
+            stats:{fullness:70,energy:70,happiness:75,cleanliness:85,fitness:30},
+            lastFed:now, lastWalk:now-1800000, lastBath:now-172800000 },
+          clover:{ id:"clover", name:"Clover", breed:"Cavalier King Charles Spaniel", emoji:"🦮",
+            img:cMain, imgAlt:null,
+            stats:{fullness:75,energy:65,happiness:80,cleanliness:88,fitness:25},
+            lastFed:now, lastWalk:now-5400000, lastBath:now-345600000 }
+        });
+      })();},[]);
+
+      useEffect(()=>{ if(!pets) return;
+        const iv = setInterval(()=>{
+          setPets(prev=>{
+            const next = {...prev};
+            for(const id of Object.keys(next)){
+              const p = {...next[id]}; const s = {...p.stats};
+              s.fullness = clamp(s.fullness - 1.5);
+              s.energy = clamp(s.energy - 1);
+              s.cleanliness = clamp(s.cleanliness - 0.3);
+              const minsSinceWalk = (Date.now() - p.lastWalk)/60000;
+              const walkPenalty = minsSinceWalk > 180 ? 1 : 0;
+              const baseMood = (s.fullness + s.energy + s.cleanliness)/3;
+              s.happiness = clamp(s.happiness + ((baseMood/100 - 0.45 - 0.01*walkPenalty)*2));
+              if (Date.now() - p.lastWalk < 45*60000) s.fitness = clamp(s.fitness + 0.2);
+              else s.fitness = clamp(s.fitness - 0.05);
+              p.stats = s; next[id] = p;
+            }
+            return next;
+          });
+        },10000);
+        return ()=>clearInterval(iv);
+      },[pets]);
+
+      useEffect(()=>{ if(!isWalking||!walkEndsAt) return;
+        const t = setInterval(()=>{ if(Date.now()>=walkEndsAt) finishWalk(); },250);
+        return ()=>clearInterval(t);
+      },[isWalking,walkEndsAt]);
+
+      useEffect(()=>{ const onKey=e=>{ if(isWalking && e.key==="ArrowRight") setSteps(s=>s+1); };
+        window.addEventListener("keydown", onKey);
+        return ()=>window.removeEventListener("keydown", onKey);
+      },[isWalking]);
+
+      if(!pets) return <div className="p-6 text-slate-600">Loading…</div>;
+      const activePet = pets[active];
+      const toast = t=>{ setMessage(t); setTimeout(()=>setMessage(""), 2200); };
+
+      function adjust(id, delta){
+        setPets(prev=>{
+          const copy = {...prev};
+          const p = {...copy[id]}; const s = {...p.stats};
+          for(const k of Object.keys(delta)) s[k] = clamp(s[k] + (delta[k]||0));
+          p.stats = s; copy[id] = p; return copy;
+        });
+      }
+      function feed(kind){
+        if (kind==="kibble") adjust(active,{fullness:+22,happiness:+4});
+        else if (kind==="treat") adjust(active,{fullness:+10,happiness:+10,cleanliness:-2});
+        else adjust(active,{cleanliness:+2,happiness:+2});
+        setPets(prev=>({...prev,[active]:{...prev[active],lastFed:Date.now()}}));
+      }
+      function playFetch(){ adjust(active,{happiness:+18,energy:-10,fullness:-6}); toast(`${activePet.name} loved playing fetch!`); }
+      function bathe(){ adjust(active,{cleanliness:+30,happiness:-2,energy:-5}); setPets(prev=>({...prev,[active]:{...prev[active],lastBath:Date.now()}})); }
+      function nap(){ adjust(active,{energy:+25,happiness:+3}); }
+      function startWalk(sec=30){ if(isWalking) return; setIsWalking(true); setSteps(0); setWalkEndsAt(Date.now()+sec*1000); toast(`${activePet.name} started a walk! Tap step or press →`); }
+      function addStep(){ if(isWalking) setSteps(s=>s+1); }
+      function finishWalk(){
+        if(!isWalking) return; setIsWalking(false); setWalkEndsAt(null);
+        adjust(active,{energy:-5,happiness:+Math.min(10+steps*0.05,25),fullness:-Math.min(5+steps*0.05,15),cleanliness:-5,fitness:+Math.min(2+steps*0.03,8)});
+        setPets(prev=>({...prev,[active]:{...prev[active],lastWalk:Date.now()}}));
+        toast(`${activePet.name} finished a walk! +happiness, +fitness (${fmt(steps)} steps)`);
+      }
+      function resetAll(){
+        localStorage.removeItem("tc_pets_v4");
+        location.reload();
+      }
+      function onPickFile(file, petId, slot){
+        const reader = new FileReader();
+        reader.onload = ()=>{ const dataUrl = String(reader.result||"");
+          setPets(prev=>({...prev,[petId]:{...prev[petId],[slot]:dataUrl}}));
+          toast(`${pets[petId].name} photo updated`);
+        };
+        reader.readAsDataURL(file);
+      }
+
+      return (
+        <div className="w-full p-4">
+          <div className="mx-auto max-w-6xl">
+            <header className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h1 className="text-3xl font-extrabold tracking-tight">Tango & Clover</h1>
+                <p className="text-slate-600">Feed, walk, play, and keep them happy. Autosaves in your browser.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={resetAll} className="rounded-2xl bg-slate-800 text-white px-3 py-2 hover:bg-slate-700">Reset</button>
+              </div>
+            </header>
+
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-12">
+              <div className="md:col-span-6">
+                <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-xl">
+                  <div className="flex items-center gap-3">
+                    {activePet.img
+                      ? <div className="relative h-24 w-24 rounded-full ring-4 ring-white overflow-hidden shadow-lg wag">
+                          <img src={activePet.img} alt={`${activePet.name} photo`} className="h-full w-full object-cover" />
+                        </div>
+                      : <div className="grid h-24 w-24 place-items-center rounded-full bg-amber-200 text-4xl wag">
+                          <span title={activePet.breed}>{activePet.emoji}</span>
+                        </div>}
+                    <div className="flex-1">
+                      <div className="text-2xl font-semibold">{activePet.name}</div>
+                      <div className="text-slate-600">{activePet.breed}</div>
+                      <div className="text-sm text-slate-700 mt-1">
+                        {(()=>{
+                          const s = activePet.stats, sinceWalk = Date.now()-activePet.lastWalk;
+                          if (s.fullness<35) return `${activePet.name} looks hungry.`;
+                          if (s.energy<30) return `${activePet.name} could use a nap.`;
+                          if (s.cleanliness<30) return `${activePet.name} needs a bath soon.`;
+                          if (sinceWalk>3*60*60*1000) return `${activePet.name} wants a walk!`;
+                          if (s.happiness<45) return `${activePet.name} needs some love.`;
+                          return `${activePet.name} is feeling good!`;
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-3 flex gap-2 flex-wrap">
+                  {["tango","clover"].map(id=>(
+                    <button key={id} onClick={()=>setActive(id)} className={`rounded-2xl px-3 py-2 border ${active===id?"bg-white border-slate-800":"bg-slate-100 border-slate-300 hover:bg-white"}`}>
+                      🐶 {pets[id].name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="md:col-span-6">
+                <div className="rounded-3xl border border-slate-200 bg-white/80 backdrop-blur p-4 shadow-lg">
+                  <h2 className="text-lg font-semibold mb-3">Care Actions</h2>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <button onClick={()=>feed("kibble")} className="rounded-2xl border border-slate-200 bg-white px-3 py-2 hover:bg-slate-50 shadow-sm">🍖 Feed kibble</button>
+                    <button onClick={()=>feed("treat")}  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 hover:bg-slate-50 shadow-sm">🍪 Give treat</button>
+                    <button onClick={()=>feed("water")}  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 hover:bg-slate-50 shadow-sm">💧 Water</button>
+                    <button onClick={playFetch} className="rounded-2xl border border-slate-200 bg-white px-3 py-2 hover:bg-slate-50 shadow-sm">🎾 Play fetch</button>
+                    <button onClick={bathe}     className="rounded-2xl border border-slate-200 bg-white px-3 py-2 hover:bg-slate-50 shadow-sm">🛁 Bathe</button>
+                    <button onClick={nap}       className="rounded-2xl border border-slate-200 bg-white px-3 py-2 hover:bg-slate-50 shadow-sm">🌙 Nap</button>
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-3xl border border-slate-200 bg-white/80 backdrop-blur p-4 shadow-lg">
+                  <h2 className="text-lg font-semibold mb-3">Walk Mini-Game</h2>
+                  <p className="text-sm text-slate-600 mb-3">Click <strong>Add Step</strong> or press <kbd>→</kbd> to rack up steps in {isWalking&&walkEndsAt?Math.max(1,Math.ceil((walkEndsAt-Date.now())/1000)):30}s.</p>
+                  <div className="flex items-center gap-2 mb-3">
+                    {!isWalking
+                      ? <button onClick={()=>startWalk(30)} className="rounded-2xl bg-emerald-600 text-white px-3 py-2 hover:bg-emerald-500">🚶 Start Walk</button>
+                      : <button onClick={finishWalk} className="rounded-2xl bg-orange-600 text-white px-3 py-2 hover:bg-orange-500">✅ Finish Walk</button>}
+                    <button onClick={addStep} disabled={!isWalking} className={`rounded-2xl px-3 py-2 border ${isWalking?"bg-white hover:bg-slate-50":"bg-slate-100 text-slate-400 cursor-not-allowed"}`}>Add Step</button>
+                    <span className="text-sm text-slate-700">Steps: <strong>{steps}</strong></span>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                    <div className="mb-1 text-sm text-slate-600">Walk progress</div>
+                    <div className="h-3 w-full rounded-full bg-slate-100 overflow-hidden">
+                      <div className="h-full bg-gradient-to-r from-emerald-300 to-emerald-500" style={{width:`${Math.min(100,(steps/200)*100)}%`}}></div>
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">{steps} steps (goal 200)</div>
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-3xl border border-slate-200 bg-white/80 backdrop-blur p-4 shadow-lg">
+                  <h2 className="text-lg font-semibold mb-3">Personalize Photos</h2>
+                  <p className="text-sm text-slate-600 mb-2">Upload your own pictures. Stored locally; not uploaded anywhere.</p>
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={()=>fileMainRef.current?.click()} className="rounded-2xl border border-slate-300 bg-white px-3 py-2 hover:bg-slate-50">📷 Set {activePet.name} Photo</button>
+                    <button onClick={()=>fileAltRef.current?.click()}  className="rounded-2xl border border-slate-300 bg-white px-3 py-2 hover:bg-slate-50">📷 Set {activePet.name} Alt Pose</button>
+                    <input ref={fileMainRef} type="file" accept="image/*" className="hidden"
+                      onChange={e=>{ const f=e.target.files?.[0]; if(f) onPickFile(f, active, "img"); e.currentTarget.value=""; }} />
+                    <input ref={fileAltRef} type="file" accept="image/*" className="hidden"
+                      onChange={e=>{ const f=e.target.files?.[0]; if(f) onPickFile(f, active, "imgAlt"); e.currentTarget.value=""; }} />
+                  </div>
+                </div>
+              </div>
+
+              <div className="md:col-span-12">
+                <div className="rounded-3xl border border-slate-200 bg-white/80 backdrop-blur p-4 shadow-lg">
+                  <h2 className="text-lg font-semibold mb-3">{activePet.name}'s Stats</h2>
+                  <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                    <StatBar label="Fullness"    value={activePet.stats.fullness}    color="from-amber-300 to-amber-500" />
+                    <StatBar label="Energy"      value={activePet.stats.energy}      color="from-yellow-300 to-yellow-500" />
+                    <StatBar label="Happiness"   value={activePet.stats.happiness}   color="from-pink-300 to-pink-500" />
+                    <StatBar label="Cleanliness" value={activePet.stats.cleanliness} color="from-sky-300 to-sky-500" />
+                    <StatBar label="Fitness"     value={activePet.stats.fitness}     color="from-emerald-300 to-emerald-500" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {message && (
+              <div className="fixed bottom-4 left-1/2 -translate-x-1/2 rounded-2xl bg-slate-900 text-white px-4 py-2 shadow-xl toast">{message}</div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
